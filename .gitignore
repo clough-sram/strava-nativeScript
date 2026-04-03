@@ -21,6 +21,10 @@ tmp/
 typings/
 
 .env
+.dev.vars
+
+# Wrangler
+.wrangler/
 
 # Visual Studio Code
 .vscode/*
