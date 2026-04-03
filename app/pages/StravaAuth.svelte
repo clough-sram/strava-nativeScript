@@ -16,12 +16,50 @@
     <actionBar title="Connect with Strava" flat="true" backgroundColor="#000000">
         <navigationButton text="Cancel" on:tap={cancel} />
     </actionBar>
-    <webView src={authUrl} on:loadStarted={onLoadStarted} />
+
+    {#if errorMessage}
+        <!-- Error state: shown when login fails -->
+        <stackLayout horizontalAlignment="center" verticalAlignment="middle" padding="32">
+            <label text="⚠" fontSize="48" color="#FC4C02" textAlignment="center" marginBottom="16" />
+            <label
+                text={errorMessage}
+                fontSize="16"
+                color="#ffffff"
+                textWrap="true"
+                textAlignment="center"
+                marginBottom="32"
+            />
+            <button
+                text="Try Again"
+                on:tap={retry}
+                backgroundColor="#FC4C02"
+                color="#ffffff"
+                fontSize="16"
+                borderRadius="4"
+                width="160"
+            />
+        </stackLayout>
+    {:else if isLoading}
+        <!-- Loading state: shown while exchanging token and fetching stats -->
+        <stackLayout horizontalAlignment="center" verticalAlignment="middle">
+            <activityIndicator busy="true" color="#FC4C02" width="48" height="48" />
+            <label
+                text="Connecting to Strava..."
+                fontSize="14"
+                color="#888888"
+                textAlignment="center"
+                marginTop="16"
+            />
+        </stackLayout>
+    {:else}
+        <!-- Default state: the Strava OAuth web page -->
+        <webView src={authUrl} on:loadStarted={onLoadStarted} />
+    {/if}
 </page>
 
 <script lang="ts">
     import { goBack } from '@nativescript-community/svelte-native'
-    import { OAUTH_URL, isRedirectUrl, extractCode, exchangeToken, getAthleteStats } from '../services/strava'
+    import { OAUTH_URL, isRedirectUrl, extractCode, extractError, exchangeToken, getAthleteStats } from '../services/strava'
     import { authStore } from '../services/auth-store'
 
     // The Strava authorisation page URL, built in strava.ts
@@ -30,49 +68,64 @@
     // Prevents the redirect from being handled more than once if the WebView
     // fires multiple load events for the same URL
     let isHandled = false
+    let isLoading = false
+    let errorMessage: string | null = null
 
     function cancel() {
         goBack()
     }
 
-    // Fires every time the embedded browser starts loading a new URL.
-    // We watch for the redirect back to our app, which signals that the
-    // user has completed (or declined) the Strava login.
+    function retry() {
+        errorMessage = null
+        isHandled = false
+    }
+
     async function onLoadStarted(event: any) {
         const url: string = event.url || ''
 
         if (!isRedirectUrl(url) || isHandled) return
         isHandled = true
 
-        // Extract the one-time code Strava includes in the redirect URL
-        const code = extractCode(url)
-        if (!code) {
-            console.error('No code found in redirect URL:', url)
-            goBack()
+        const error = extractError(url)
+        if (error === 'access_denied') {
+            errorMessage = 'You declined the Strava permissions request. Tap "Try Again" and approve access to continue.'
             return
         }
 
+        const code = extractCode(url)
+        if (!code) {
+            errorMessage = 'Login failed — no authorisation code received. Please try again.'
+            return
+        }
+
+        isLoading = true
+
         try {
-            // Send the code to our Cloudflare Worker, which swaps it for an
-            // access token using our app's secret key (stored securely server-side)
-            console.log('Exchanging code for token...')
             const tokenData = await exchangeToken(code)
-            const accessToken = tokenData.access_token
-            const athlete = tokenData.athlete
-            console.log('Got access token for athlete:', athlete.id)
+            const { access_token, athlete } = tokenData
 
-            // Fetch the athlete's lifetime stats from Strava
-            console.log('Fetching athlete stats...')
-            const stats = await getAthleteStats(athlete.id, accessToken)
-            console.log('Athlete Stats:', JSON.stringify(stats, null, 2))
+            const stats = await getAthleteStats(athlete.id, access_token)
+            await authStore.login(access_token, athlete, stats)
 
-            // Save the session to the device so the user stays logged in
-            await authStore.login(accessToken, athlete, stats)
-        } catch (error) {
-            console.error('Strava auth error:', error)
-        } finally {
-            // Return to the home screen whether login succeeded or failed
             goBack()
+        } catch (error: any) {
+            isLoading = false
+            isHandled = false
+
+            if (error?.message?.includes('403')) {
+                errorMessage = 'This Strava account is not authorised to use this app.'
+            } else if (error?.message?.includes('Token exchange failed')) {
+                errorMessage = 'Could not connect to Strava. Please check your connection and try again.'
+            } else {
+                errorMessage = 'Something went wrong during login. Please try again.'
+            }
         }
     }
 </script>
+
+<style>
+    actionBar {
+        background-color: #000000;
+        color: #ffffff;
+    }
+</style>
