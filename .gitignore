@@ -21,7 +21,6 @@ tmp/
 typings/
 
 .env
-strava-worker
 
 # Visual Studio Code
 .vscode/*
